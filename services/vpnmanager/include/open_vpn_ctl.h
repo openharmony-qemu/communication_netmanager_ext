@@ -19,6 +19,7 @@
 #include "cJSON.h"
 #include "netsys_controller.h"
 #include "net_vpn_impl.h"
+#include <chrono>
 #include "openvpn_config.h"
 
 #define VPN_PIDDIR "/data/service/el1/public/vpn"
@@ -71,6 +72,13 @@ public:
     bool IsSystemVpn() override;
     sptr<SysVpnConfig> GetSysVpnConfig() override;
     sptr<OpenvpnConfig> openvpnConfig_;
+    int32_t GetQemuSession(std::string &snapshot, int32_t caller);
+    int32_t HandleQemuStage(const std::string &body, int32_t result, int32_t caller);
+    bool HasQemuSession() const { return !qemuGeneration_.empty(); }
+    bool IsQemuSession(const std::string &generation) const
+    { return !qemuGeneration_.empty() && generation == qemuGeneration_; }
+    bool IsOpenvpnConnected() const;
+    bool QemuNeedsRecovery() const;
 
 private:
     const std::string  OPENVPN_ASKPASS_FILE = VPN_PIDDIR "/askpass";
@@ -84,7 +92,22 @@ private:
     void UpdateConfig(cJSON* jConfig);
     int32_t ProcessDnsConfig(cJSON* jConfig);
     void UpdateState(cJSON* state);
-    void StopOpenvpn();
+    int32_t StopOpenvpn();
+    bool InitQemuSession();
+    int32_t UpdateQemuConfig(cJSON *config);
+    std::string QemuBrokerMessage(bool start) const;
+    std::string qemuGeneration_;
+    std::string qemuWorkerStart_;
+    std::string qemuBrokerStart_;
+    int32_t qemuBroker_ = -1;
+    std::chrono::steady_clock::time_point qemuClaimDeadline_;
+    bool qemuStoppingRequested_ = false;
+    int32_t qemuSupervisor_ = -1;
+    bool qemuWorkerStopped_ = false;
+    bool qemuNeedsCleanup_ = false;
+    bool qemuConfigured_ = false;
+    bool qemuTunReady_ = false;
+    std::string qemuLastConfig_;
 };
 } // namespace NetManagerStandard
 } // namespace OHOS

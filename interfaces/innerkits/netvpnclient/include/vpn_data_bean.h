@@ -43,6 +43,8 @@ struct VpnDataBean : public virtual RefBase {
     std::string dnsAddresses_;
     std::string searchDomains_;
     std::string remoteAddr_;
+    // Versioned full network snapshot, separate from encrypted credentials.
+    std::string networkConfig_;
 
     //openvpn
     std::string ovpnPort_;

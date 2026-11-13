@@ -20,7 +20,11 @@
 
 #include "i_netfirewall_service.h"
 #include "netfirewall_common.h"
+#if __has_include("system_ability_load_callback_stub.h")
 #include "system_ability_load_callback_stub.h"
+#else
+#include "../../../../../../systemabilitymgr/samgr/interfaces/innerkits/samgr_proxy/include/system_ability_load_callback_stub.h"
+#endif
 
 namespace OHOS {
 namespace NetManagerStandard {

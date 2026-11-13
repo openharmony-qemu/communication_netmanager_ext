@@ -100,7 +100,7 @@ config("ethernet_service_interface_stub_config") {
   if (netmanager_ext_feature_iface_supplier_id) {
     defines += [ "FEATURE_GET_IFACE_SUPPLIER_ID" ]
   }
-  if (netmanager_ext_feature_net_firewall) {
+  if (netmanager_ext_feature_ethernet) {
     defines += [ "NETMANAGER_EXT_ETHERNET_ENABLE_DISABLE" ]
   }
 }
@@ -182,7 +182,7 @@ ohos_shared_library("ethernet_manager_if") {
   }
 
   # Enable ethernet enable/disable feature conditionally
-  if (netmanager_ext_feature_net_firewall) {
+  if (netmanager_ext_feature_ethernet) {
     defines += [ "NETMANAGER_EXT_ETHERNET_ENABLE_DISABLE" ]
   }
 

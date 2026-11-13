@@ -188,7 +188,7 @@ int32_t NetFirewallInterceptRecorder::FirewallCallback::OnIntercept(sptr<Interce
         return FIREWALL_ERR_INTERNAL;
     }
     // LCOV_EXCL_STOP
-    NETMGR_EXT_LOG_I("FirewallCallback::OnIntercept: time=%{public}lu", record->time);
+    NETMGR_EXT_LOG_I("FirewallCallback::OnIntercept: time=%{public}llu", static_cast<unsigned long long>(record->time));
     ReportInterceptWithoutSkip(record);
     if (!recorder_) {
         return FIREWALL_ERR_INTERNAL;

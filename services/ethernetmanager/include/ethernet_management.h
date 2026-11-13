@@ -17,6 +17,7 @@
 #define ETHERNET_MANAGEMENT_H
 
 #include <map>
+#include <mutex>
 #include <shared_mutex>
 
 #include "dev_interface_state.h"
@@ -125,8 +126,14 @@ private:
     void MergeEthernetConfig(StaticConfiguration &config, StaticConfiguration &configV4,
         StaticConfiguration &configV6);
 #ifdef NETMANAGER_EXT_ETHERNET_ENABLE_DISABLE
-    void EnableAllInterfaces();
     void DisableAllInterfaces();
+    int32_t SetEthernetEnabled(bool enabled);
+    int32_t SnapshotInterfaceStates(std::map<std::string, bool> &states);
+    int32_t ReadInterfaceAdminState(const std::string &iface, bool &enabled);
+    int32_t SetInterfaceAdminState(const std::string &iface, bool enabled);
+    int32_t StoreEthernetEnabled(bool enabled);
+    void RestoreInterfaceStates(const std::map<std::string, bool> &states);
+    void ConfigureAddedInterface(const std::string &iface);
     void ReinitializeNetwork();
     void CleanupNetworkState();
     void InitEthernetEnabledState();
@@ -149,6 +156,9 @@ private:
     std::map<std::string, StaticConfiguration> configsV4_;
     std::map<std::string, StaticConfiguration> configsV6_;
 #ifdef NETMANAGER_EXT_ETHERNET_ENABLE_DISABLE
+    // Never hold mutex_ across Netsys/DataShare IPC. Serialize the global
+    // policy with hot-add and startup retries using this separate lock.
+    std::mutex ethernetControlMutex_;
     bool ethernetEnabled_ = true;
 #endif
 };

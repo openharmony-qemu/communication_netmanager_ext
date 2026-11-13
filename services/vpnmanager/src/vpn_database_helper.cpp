@@ -52,7 +52,7 @@ VpnDatabaseHelper::VpnDatabaseHelper()
     OHOS::NativeRdb::RdbStoreConfig config(vpnDatabaseName);
     config.SetSecurityLevel(NativeRdb::SecurityLevel::S1);
     VpnDataBaseCallBack sqliteOpenHelperCallback;
-    store_ = OHOS::NativeRdb::RdbHelper::GetRdbStore(config, VPN_DATA_DB_VER_2, sqliteOpenHelperCallback, errCode);
+    store_ = OHOS::NativeRdb::RdbHelper::GetRdbStore(config, VPN_DATA_DB_VER_3, sqliteOpenHelperCallback, errCode);
     if (errCode != OHOS::NativeRdb::E_OK && errCode != OHOS::NativeRdb::E_SQLITE_CORRUPT) {
         NETMGR_EXT_LOG_E("GetRdbStore failed. errCode :%{public}d", errCode);
     } else {
@@ -83,8 +83,16 @@ int32_t VpnDataBaseCallBack::OnCreate(OHOS::NativeRdb::RdbStore &store)
 int32_t VpnDataBaseCallBack::OnUpgrade(OHOS::NativeRdb::RdbStore &store, int32_t oldVersion, int32_t newVersion)
 {
     int32_t ret = NETMANAGER_EXT_SUCCESS;
-    if (newVersion == VPN_DATA_DB_VER_2) {
+    if (oldVersion < VPN_DATA_DB_VER_2 && newVersion >= VPN_DATA_DB_VER_2) {
         std::string sql = "ALTER TABLE " + VPN_CONFIG_TABLE + " ADD COLUMN " + VPN_REMOTE_ADDR
+            + " TEXT NOT NULL DEFAULT '';";
+        ret = store.ExecuteSql(sql);
+        if (ret != OHOS::NativeRdb::E_OK) {
+            return ret;
+        }
+    }
+    if (oldVersion < VPN_DATA_DB_VER_3 && newVersion >= VPN_DATA_DB_VER_3) {
+        std::string sql = "ALTER TABLE " + VPN_CONFIG_TABLE + " ADD COLUMN " + VPN_NETWORK_CONFIG
             + " TEXT NOT NULL DEFAULT '';";
         ret = store.ExecuteSql(sql);
     }
@@ -320,6 +328,7 @@ void VpnDatabaseHelper::BindVpnData(NativeRdb::ValuesBucket &values, const sptr<
     values.PutString(XL2TPD_CONF, info->xl2tpdConf_);
     values.PutString(L2TP_SHARED_KEY, info->l2tpSharedKey_);
     values.PutString(VPN_REMOTE_ADDR, info->remoteAddr_);
+    values.PutString(VPN_NETWORK_CONFIG, info->networkConfig_);
 }
 // LCOV_EXCL_STOP
 
@@ -418,6 +427,11 @@ void VpnDatabaseHelper::GetVpnDataFromResultSet(const std::shared_ptr<OHOS::Nati
     queryResultSet->GetString(INDEX_XL2TPD_CONF, vpnBean->xl2tpdConf_);
     queryResultSet->GetString(INDEX_L2TP_SHARED_KEY, vpnBean->l2tpSharedKey_);
     queryResultSet->GetString(INDEX_VPN_REMOTE_ADDR, vpnBean->remoteAddr_);
+    if (queryResultSet->GetString(INDEX_VPN_NETWORK_CONFIG, vpnBean->networkConfig_) != OHOS::NativeRdb::E_OK) {
+        // Do not mistake a schema/read failure for a valid legacy row.
+        vpnBean->networkConfig_ = "unreadable-network-snapshot";
+        NETMGR_EXT_LOG_E("Cannot read VPN network snapshot");
+    }
 }
 // LCOV_EXCL_STOP
 

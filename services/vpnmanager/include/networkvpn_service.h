@@ -17,6 +17,7 @@
 #define NETWORK_VPN_SERVICE_H
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include "event_handler.h"
@@ -101,17 +102,22 @@ class NetworkVpnService : public SystemAbility, public NetworkVpnServiceStub, pr
     };
 
     class VpnHapObserver;
+    struct CallbackOrigin;
+    struct CallbackDispatchState;
     class VpnConnStateCb : public IVpnConnStateCb {
     public:
-        explicit VpnConnStateCb(NetworkVpnService &vpnService) : vpnService_(vpnService) {};
-        virtual ~VpnConnStateCb() = default;
+        VpnConnStateCb(std::weak_ptr<NetworkVpnService> service, std::shared_ptr<CallbackOrigin> origin)
+            : service_(service), origin_(std::move(origin)) {}
+        virtual ~VpnConnStateCb();
+        void Commit();
         void OnVpnConnStateChanged(const VpnConnectState &state, const sptr<VpnState> &vpnState) override;
         void SendConnStateChanged(const VpnConnectState &state, int32_t vpnType = 0,
                                   const std::string &vpnId = "") override;
         void OnMultiVpnConnStateChanged(const VpnConnectState &state, const std::string &vpnId) override;
 
     private:
-        NetworkVpnService &vpnService_;
+        std::weak_ptr<NetworkVpnService> service_;
+        std::shared_ptr<CallbackOrigin> origin_;
     };
 
     class ReceiveMessage : public OHOS::EventFwk::CommonEventSubscriber {
@@ -209,7 +215,7 @@ public:
     /**
      * get the vpn connection state
      */
-    int32_t GetConnectedSysVpnConfig(sptr<SysVpnConfig> &config) override;
+    int32_t GetConnectedSysVpnConfig(std::vector<sptr<SysVpnConfig>> &configs) override;
 
     /**
      * notify the vpn connection stage and result
@@ -268,6 +274,8 @@ public:
      * read the persisted always on vpn's package
     */
     int32_t GetAlwaysOnVpn(std::string &pkg);
+    int32_t SetAlwaysOnVpnEnabled(bool enable, const std::string &bundleName) override;
+    int32_t IsAlwaysOnVpnEnabled(const std::string &bundleName, bool &enabled) override;
 
     int32_t GetSelfAppName(std::string &selfAppName, std::string &selfBundleName) override;
     int32_t GetAppNameByUid(int32_t uid, std::string &appName, std::string &bundleName);
@@ -334,9 +342,14 @@ private:
     bool PublishEvent(const OHOS::AAFwk::Want &want, int eventCode,
          bool isOrdered, bool isSticky, const std::vector<std::string> &permissions) const;
     void PublishVpnConnectionStateEvent(const VpnConnectState &state, int32_t vpnType = 0) const;
-    bool IsNeedNotify(const VpnConnectState &state, const std::string &vpnId);
+    bool IsNeedNotify(const VpnConnectState &state, const std::string &vpnId, int32_t userId);
     void SetUpVpnExt(std::string &vpnBundleName, std::shared_ptr<NetVpnImpl> &vpnObj, VpnConfig &config);
     int32_t DestroyVpnExt();
+    int32_t DestroyOwnedConnection(const std::shared_ptr<NetVpnImpl> &object);
+#ifdef SUPPORT_SYSVPN
+    bool ScheduleQemuHealthCheck();
+    bool ReconcileQemuSessions(bool force, uint64_t healthEpoch = 0);
+#endif
     int32_t DestroyVpnIdExt(std::string vpnId);
     int64_t GetCurTimestamp();
     std::string ConvertVpnTracesToJsonString(const std::vector<VpnTrace>& traces);
@@ -385,10 +398,6 @@ private:
         AppExecFwk::ProcessType processType = AppExecFwk::ProcessType::NORMAL,
         AppExecFwk::ExtensionAbilityType extensionType = AppExecFwk::ExtensionAbilityType::UNSPECIFIED);
     bool CheckVpnPermission(const std::string &bundleName);
-    void OnVpnConnStateChanged(const VpnConnectState &state, const sptr<VpnState> &vpnState);
-#ifdef SUPPORT_SYSVPN
-    void OnMultiVpnConnStateChanged(const VpnConnectState &state, const std::string &vpnId, int32_t userId);
-#endif
     bool IsDistributedModemSharingVpn();
     bool IsWantBundleNameValid(const AAFwk::Want &want, int32_t uid);
     int32_t RegisterBundleName(const std::string &bundleName, const std::string &abilityName);
@@ -396,7 +405,12 @@ private:
 private:
     ServiceRunningState state_ = ServiceRunningState::STATE_STOPPED;
     bool isServicePublished_ = false;
-    std::shared_ptr<IVpnConnStateCb> vpnConnCallback_;
+    std::shared_ptr<CallbackDispatchState> callbackDispatch_;
+    std::shared_ptr<VpnConnStateCb> CreateConnectionCallback(const std::shared_ptr<NetVpnImpl> &object,
+        const std::string &owner, int32_t userId, const std::string &vpnId);
+    bool RegisterCallbackEpoch(const sptr<IVpnEventCallback> &callback, bool multi, const std::string &owner);
+    void QueueConnectionEvent(const std::shared_ptr<CallbackOrigin> &origin, const VpnConnectState &state,
+        const sptr<VpnState> &vpnState, int kind, int32_t vpnType = 0);
     ffrt::shared_mutex netVpnMutex_;
     std::shared_ptr<NetVpnImpl> vpnObj_;
 #ifdef SUPPORT_SYSVPN
@@ -489,6 +503,7 @@ private:
 
     std::mutex vpnNameMutex_;
     std::mutex cesMutex_;
+    std::mutex alwaysOnPolicyMutex_;
     sptr<IRemoteObject::DeathRecipient> deathRecipient_ = nullptr;
     std::atomic<bool> registeredCommonEvent_ = false;
     int32_t hasOpenedVpnUid_ = 0;

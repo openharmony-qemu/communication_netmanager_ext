@@ -14,6 +14,7 @@
  */
 
 #include "vpn_data_bean.h"
+#include "vpn_network_config.h"
 #include "netmgr_ext_log_wrapper.h"
 #include "net_manager_ext_constants.h"
 
@@ -64,6 +65,7 @@ sptr<OpenvpnConfig> VpnDataBean::ConvertVpnBeanToOpenvpnConfig(sptr<VpnDataBean>
     openvpnConfig->userId_ = vpnBean->userId_;
     openvpnConfig->isLegacy_ = (vpnBean->isLegacy_) == 1;
     openvpnConfig->saveLogin_ = (vpnBean->saveLogin_) == 1;
+    openvpnConfig->forwardingRoutes_ = vpnBean->forwardingRoutes_;
 
     openvpnConfig->ovpnPort_ = vpnBean->ovpnPort_;
     openvpnConfig->ovpnProtocol_ = vpnBean->ovpnProtocol_;
@@ -79,6 +81,10 @@ sptr<OpenvpnConfig> VpnDataBean::ConvertVpnBeanToOpenvpnConfig(sptr<VpnDataBean>
         openvpnConfig->remoteAddresses_.push_back(vpnBean->remoteAddr_);
     }
 
+    if (!VpnNetworkStorage::Restore(vpnBean->networkConfig_, *openvpnConfig)) {
+        NETMGR_EXT_LOG_E("Invalid OpenVPN network snapshot");
+        return nullptr;
+    }
     return openvpnConfig;
 }
 
@@ -123,6 +129,10 @@ sptr<IpsecVpnConfig> VpnDataBean::ConvertVpnBeanToIpsecVpnConfig(sptr<VpnDataBea
 
     if (!vpnBean->remoteAddr_.empty()) {
         ipsecVpnConfig->remoteAddresses_.push_back(vpnBean->remoteAddr_);
+    }
+    if (!VpnNetworkStorage::Restore(vpnBean->networkConfig_, *ipsecVpnConfig)) {
+        NETMGR_EXT_LOG_E("Invalid IPsec network snapshot");
+        return nullptr;
     }
     return ipsecVpnConfig;
 }
@@ -170,6 +180,10 @@ sptr<L2tpVpnConfig> VpnDataBean::ConvertVpnBeanToL2tpVpnConfig(sptr<VpnDataBean>
     if (!vpnBean->remoteAddr_.empty()) {
         l2tpVpnConfig->remoteAddresses_.push_back(vpnBean->remoteAddr_);
     }
+    if (!VpnNetworkStorage::Restore(vpnBean->networkConfig_, *l2tpVpnConfig)) {
+        NETMGR_EXT_LOG_E("Invalid L2TP network snapshot");
+        return nullptr;
+    }
     return l2tpVpnConfig;
 }
 
@@ -185,6 +199,10 @@ sptr<VpnDataBean> VpnDataBean::ConvertSysVpnConfigToVpnBean(const sptr<SysVpnCon
         return nullptr;
     }
     ConvertCommonVpnConfigToVpnBean(sysVpnConfig, vpnBean);
+    if (!VpnNetworkStorage::Encode(*sysVpnConfig, vpnBean->networkConfig_)) {
+        NETMGR_EXT_LOG_E("Cannot encode bounded VPN network snapshot");
+        return nullptr;
+    }
     switch (sysVpnConfig->vpnType_) {
         case VpnType::IKEV2_IPSEC_MSCHAPv2:
         case VpnType::IKEV2_IPSEC_PSK:

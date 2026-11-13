@@ -19,6 +19,7 @@ config("net_conn_manager_if_config") {
     "include",
     "include/ipc",
     "$EXT_INNERKITS_ROOT/include",
+    "//foundation/systemabilitymgr/samgr/interfaces/innerkits/samgr_proxy/include",
   ]
 
   defines = []

@@ -31,6 +31,21 @@
 namespace OHOS {
 namespace NetManagerStandard {
 
+int32_t NetworkVpnClient::SetAlwaysOnVpnEnabled(bool enable, const std::string &bundleName)
+{
+    auto proxy = GetProxy();
+    return proxy == nullptr ? NETMANAGER_EXT_ERR_GET_PROXY_FAIL :
+        proxy->SetAlwaysOnVpnEnabled(enable, bundleName);
+}
+
+int32_t NetworkVpnClient::IsAlwaysOnVpnEnabled(const std::string &bundleName, bool &enabled)
+{
+    enabled = false;
+    auto proxy = GetProxy();
+    return proxy == nullptr ? NETMANAGER_EXT_ERR_GET_PROXY_FAIL :
+        proxy->IsAlwaysOnVpnEnabled(bundleName, enabled);
+}
+
 static constexpr uint32_t WAIT_FOR_SERVICE_TIME_MS = 500;
 static constexpr uint32_t MAX_GET_SERVICE_COUNT = 10;
 
@@ -412,7 +427,21 @@ int32_t NetworkVpnClient::GetConnectedSysVpnConfig(sptr<SysVpnConfig> &config)
         NETMGR_EXT_LOG_E("GetConnectedSysVpnConfig proxy is nullptr");
         return NETMANAGER_EXT_ERR_GET_PROXY_FAIL;
     }
-    return proxy->GetConnectedSysVpnConfig(config);
+    // A zero-or-one private IPC list preserves the service's legal no-VPN
+    // result without confusing a null Parcelable with a decoding failure.
+    config = nullptr;
+    std::vector<sptr<SysVpnConfig>> configs;
+    int32_t result = proxy->GetConnectedSysVpnConfig(configs);
+    if (result != NETMANAGER_EXT_SUCCESS) {
+        return result;
+    }
+    if (configs.size() > 1 || (!configs.empty() && configs.front() == nullptr)) {
+        return NETMANAGER_EXT_ERR_INTERNAL;
+    }
+    if (!configs.empty()) {
+        config = configs.front();
+    }
+    return NETMANAGER_EXT_SUCCESS;
 }
 
 int32_t NetworkVpnClient::NotifyConnectStage(const std::string &stage, const int32_t &result)

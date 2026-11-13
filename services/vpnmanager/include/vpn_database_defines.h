@@ -64,14 +64,17 @@ constexpr const char *VPN_CONFIG_TABLE_CREATE_PARAM = "vpnId TEXT PRIMARY KEY NO
     "optionsL2tpdClient TEXT NOT NULL,"
     "xl2tpdConf TEXT NOT NULL,"
     "l2tpSharedKey TEXT NOT NULL,"
-    "remoteAddresses TEXT NOT NULL";
+    "remoteAddresses TEXT NOT NULL,"
+    "networkConfig TEXT NOT NULL DEFAULT ''";
 
 const std::string VPN_CONFIG_TABLE = "T_vpn_config";
 
-constexpr int32_t VPN_CONFIG_TABLE_PARAM_NUM = 41;
+constexpr int32_t VPN_CONFIG_TABLE_PARAM_NUM = 42;
 
 constexpr int32_t DATABASE_OPEN_VERSION = 1;
 constexpr int32_t VPN_DATA_DB_VER_2 = 2; // add new column "remoteAddresses"
+constexpr int32_t VPN_DATA_DB_VER_3 = 3; // preserve the complete network snapshot
+const std::string VPN_NETWORK_CONFIG = "networkConfig";
 
 const std::string VPN_ID = "vpnId";
 const std::string VPN_NAME = "vpnName";
@@ -160,6 +163,7 @@ constexpr int32_t INDEX_OPTIONS_L2TPD_CLIENT = 37;
 constexpr int32_t INDEX_XL2TPD_CONF = 38;
 constexpr int32_t INDEX_L2TP_SHARED_KEY = 39;
 constexpr int32_t INDEX_VPN_REMOTE_ADDR = 40;
+constexpr int32_t INDEX_VPN_NETWORK_CONFIG = 41;
 } // namespace VpnDatabaseDefines
 } // namespace NetManagerStandard
 } // namespace OHOS

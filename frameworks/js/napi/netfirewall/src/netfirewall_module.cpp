@@ -120,7 +120,6 @@ void DeclareNetFirewallInterface(napi_env env, napi_value exports)
         DECLARE_NAPI_FUNCTION(FUNCTION_GET_NET_FIREWALL_RULE, GetNetFirewallRule),
         DECLARE_NAPI_FUNCTION(FUNCTION_GET_INTERCEPT_RECORDS, GetInterceptRecords),
         });
-    return exports;
 }
 
 void InitNetFirewallRuleDirection(napi_env env, napi_value exports)

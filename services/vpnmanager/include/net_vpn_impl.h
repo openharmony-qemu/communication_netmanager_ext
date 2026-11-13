@@ -108,7 +108,7 @@ protected:
     bool UpdateNetLinkInfo();
     void UpdateAddress(sptr<NetLinkInfo>& linkInfo);
     bool RegisterNetSupplier(NetConnClient &netConnClientIns, bool isInternalChannel = false);
-    void UnregisterNetSupplier(NetConnClient &netConnClientIns);
+    bool UnregisterNetSupplier(NetConnClient &netConnClientIns);
     bool UpdateNetSupplierInfo(NetConnClient &netConnClientIns, bool isAvailable);
     bool IsGlobalVpn();
     std::string GetVpnIfAddr();
@@ -121,7 +121,7 @@ protected:
     uint32_t GetNetSupplierId() const;
 
 private:
-    void DelNetLinkInfo(NetConnClient &netConnClientIns);
+    bool DelNetLinkInfo(NetConnClient &netConnClientIns);
     void AdjustRouteInfo(Route &route);
     void SetIpv4DefaultRoute(Route &ipv4DefaultRoute);
     void SetIpv6DefaultRoute(Route &ipv6DefaultRoute);
@@ -135,7 +135,7 @@ private:
     std::string ConvertVpnIpv4Address(uint32_t addressIpv4);
     uint32_t GetVpnInterffaceToId(const std::string &ifName);
 #ifdef SUPPORT_SYSVPN
-    void ProcessUpRules(bool isUp);
+    int32_t ProcessUpRules(bool isUp);
 public:
     sptr<MultiVpnInfo> multiVpnInfo_ = nullptr;
 #endif // SUPPORT_SYSVPN

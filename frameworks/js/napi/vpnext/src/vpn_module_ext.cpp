@@ -29,6 +29,7 @@
 #include "netmanager_ext_log.h"
 #include "networkvpn_client.h"
 #include "vpn_connection_ext.h"
+#include "vpn_always_on_napi.h"
 #include "vpn_extension_context.h"
 #include "vpn_monitor_ext.h"
 #include "want.h"
@@ -46,7 +47,7 @@ constexpr int32_t ARG_NUM_0 = 0;
 constexpr int32_t PARAM_ONE = 1;
 #ifdef SUPPORT_SYSVPN
 constexpr const char *ENUM_SYSVPN_TYPE = "SysVpnType";
-constexpr const char *IKEV2_IPSEC_MSCHAPv2_TYPE = "IKEV2_IPSEC_MSCHAPv2";
+constexpr const char *IKEV2_IPSEC_MSCHAPv2_TYPE = "IKEV2_IPSEC_MSCHAPV2";
 constexpr const char *IKEV2_IPSEC_PSK_TYPE = "IKEV2_IPSEC_PSK";
 constexpr const char *IKEV2_IPSEC_RSA_TYPE = "IKEV2_IPSEC_RSA";
 constexpr const char *L2TP_IPSEC_PSK_TYPE = "L2TP_IPSEC_PSK";
@@ -542,6 +543,8 @@ napi_value RegisterVpnExtModule(napi_env env, napi_value exports)
                                     DECLARE_NAPI_FUNCTION(CREATE_VPN_CONNECTION, CreateVpnConnection),
                                     DECLARE_NAPI_FUNCTION(START_VPN_EXTENSION, StartVpnExtensionAbility),
                                     DECLARE_NAPI_FUNCTION(STOP_VPN_EXTENSION, StopVpnExtensionAbility),
+                                    DECLARE_NAPI_FUNCTION("setAlwaysOnVpnEnabled", SetAlwaysOnVpnEnabled),
+                                    DECLARE_NAPI_FUNCTION("isAlwaysOnVpnEnabled", IsAlwaysOnVpnEnabled),
                                     DECLARE_NAPI_FUNCTION(UPDATE_VPN_AUTHORIZE, UpdateVpnAuthorize),
                                     DECLARE_NAPI_FUNCTION(CREATE_VPN_OBSERVER, CreateVpnObserver),
                                 });

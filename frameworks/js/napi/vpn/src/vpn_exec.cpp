@@ -152,6 +152,12 @@ bool ExecGetSysVpnConfigList(GetListContext *context)
         context->SetErrorCode(result);
         return false;
     }
+    for (const auto &config : context->vpnList_) {
+        if (config == nullptr) {
+            context->SetErrorCode(NETMANAGER_EXT_ERR_INTERNAL);
+            return false;
+        }
+    }
     return true;
 }
 
@@ -164,6 +170,10 @@ bool ExecGetSysVpnConfig(GetContext *context)
     int32_t result = NetworkVpnClient::GetInstance().GetSysVpnConfig(context->vpnConfig_, context->vpnId_);
     if (result != NETMANAGER_EXT_SUCCESS) {
         context->SetErrorCode(result);
+        return false;
+    }
+    if (context->vpnConfig_ == nullptr) {
+        context->SetErrorCode(NETMANAGER_EXT_ERR_INTERNAL);
         return false;
     }
     return true;
@@ -260,9 +270,10 @@ napi_value GetSysVpnConfigListCallback(GetListContext *context)
     auto len = context->vpnList_.size();
     napi_value array = NapiUtils::CreateArray(context->GetEnv(), len);
     for (const auto &info : context->vpnList_) {
-        napi_value config = NapiUtils::CreateObject(context->GetEnv());
-        NapiUtils::SetStringPropertyUtf8(context->GetEnv(), config, VpnConfigUtils::CONFIG_VPN_ID, info->vpnId_);
-        NapiUtils::SetStringPropertyUtf8(context->GetEnv(), config, VpnConfigUtils::CONFIG_VPN_NAME, info->vpnName_);
+        // SysVpnConfig includes mandatory addresses, not just a display label.
+        // Serialize the same typed configuration as getSysVpnConfig.
+        sptr<SysVpnConfig> nativeConfig = info;
+        napi_value config = VpnConfigUtils::CreateNapiVpnConfig(context->GetEnv(), nativeConfig);
         NapiUtils::SetArrayElement(context->GetEnv(), array, index, config);
         ++index;
     }

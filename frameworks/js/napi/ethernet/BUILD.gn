@@ -43,7 +43,7 @@ ohos_shared_library("ethernet") {
   ]
 
   # Add enable/disable sources conditionally
-  if (netmanager_ext_feature_net_firewall) {
+  if (netmanager_ext_feature_ethernet) {
     sources += [
       "context/disable_ethernet_context.cpp",
       "context/enable_ethernet_context.cpp",
@@ -53,7 +53,7 @@ ohos_shared_library("ethernet") {
   defines = [ "NETMGR_DEBUG" ]
 
   # Enable ethernet enable/disable feature conditionally
-  if (netmanager_ext_feature_net_firewall) {
+  if (netmanager_ext_feature_ethernet) {
     defines += [ "NETMANAGER_EXT_ETHERNET_ENABLE_DISABLE" ]
   }
 

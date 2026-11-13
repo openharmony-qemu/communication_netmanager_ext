@@ -43,9 +43,9 @@ struct RecoverCallbackPara {
 
 class VpnSetUpEventCallback : public VpnEventCallbackStub {
 public:
-    int32_t OnVpnStateChanged(bool isConnected, const sptr<VpnState> &vpnState) override{ return ERR_OK; };
-    int32_t OnMultiVpnStateChanged(bool isConnected, const std::string &bundleName,
-        const std::string &vpnId) override{ return ERR_OK; };
+    int32_t OnVpnStateChanged(bool, const sptr<VpnState> &) override{ return ERR_OK; };
+    int32_t OnMultiVpnStateChanged(bool, const std::string &,
+        const std::string &) override{ return ERR_OK; };
     int32_t OnVpnMultiUserSetUp() override;
 };
 
@@ -76,6 +76,8 @@ private:
 
 public:
     static NetworkVpnClient &GetInstance();
+    int32_t SetAlwaysOnVpnEnabled(bool enable, const std::string &bundleName);
+    int32_t IsAlwaysOnVpnEnabled(const std::string &bundleName, bool &enabled);
 
 public:
     /**

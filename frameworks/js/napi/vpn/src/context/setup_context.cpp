@@ -15,6 +15,7 @@
 
 #include "setup_context.h"
 
+#include <cmath>
 #include <new>
 #include <string>
 #include <vector>
@@ -95,18 +96,6 @@ void GetStringFromJsOptionItem(napi_env env, napi_value object, const std::strin
     }
 }
 
-void GetUint8FromJsOptionItem(napi_env env, napi_value object, const std::string &key, uint8_t &value)
-{
-    if (NapiUtils::HasNamedProperty(env, object, key)) {
-        if (NapiUtils::GetValueType(env, NapiUtils::GetNamedProperty(env, object, key)) == napi_number) {
-            value = static_cast<uint8_t>(NapiUtils::GetUint32Property(env, object, key));
-            NETMGR_EXT_LOG_I("%{public}s: %{public}d", key.c_str(), value);
-        } else {
-            NETMGR_EXT_LOG_E("param [%{public}s] type is mismatch", key.c_str());
-        }
-    }
-}
-
 void GetBoolFromJsOptionItem(napi_env env, napi_value object, const std::string &key, bool &value)
 {
     if (NapiUtils::HasNamedProperty(env, object, key)) {
@@ -174,18 +163,33 @@ bool SetUpContext::ParseVpnConfig(napi_value *params)
 
 static bool ParseAddressFamily(napi_env env, napi_value netAddress, uint8_t &family)
 {
-    // The value is 1 for IPv4 and 2 for IPv6. The default value is 1.
-    if (!NapiUtils::HasNamedProperty(env, netAddress, NET_FAMILY)) {
+    // Validate the SDK number before narrowing; 257/258 are not IPv4/IPv6.
+    bool present = false;
+    if (napi_has_named_property(env, netAddress, NET_FAMILY, &present) != napi_ok) {
+        return false;
+    }
+    if (!present) {
         family = NET_FAMILY_IPV4;
         return true;
     }
-    GetUint8FromJsOptionItem(env, netAddress, NET_FAMILY, family);
-    if (family == NET_FAMILY_IPV4 || family == NET_FAMILY_IPV6) {
-        return true;
-    } else {
-        NETMGR_EXT_LOG_E("family %{public}u is mismatch", family);
+    napi_value value = nullptr;
+    napi_valuetype type = napi_undefined;
+    if (napi_get_named_property(env, netAddress, NET_FAMILY, &value) != napi_ok ||
+        napi_typeof(env, value, &type) != napi_ok) {
         return false;
     }
+    if (type == napi_undefined) {
+        family = NET_FAMILY_IPV4;
+        return true;
+    }
+    double requested = 0;
+    if (type != napi_number || napi_get_value_double(env, value, &requested) != napi_ok ||
+        !std::isfinite(requested) || std::trunc(requested) != requested ||
+        (requested != NET_FAMILY_IPV4 && requested != NET_FAMILY_IPV6)) {
+        return false;
+    }
+    family = static_cast<uint8_t>(requested);
+    return true;
 }
 
 static bool ParseAddress(napi_env env, napi_value address, struct INetAddr &iNetAddr)
@@ -213,16 +217,24 @@ static bool ParseAddress(napi_env env, napi_value address, struct INetAddr &iNet
         return false;
     }
 
-    GetUint8FromJsOptionItem(env, netAddress, NET_PORT, iNetAddr.port_);
+    if (!NapiUtils::GetOptionalUint16Property(env, netAddress, NET_PORT, iNetAddr.port_)) {
+        return false;
+    }
 
-    if (NapiUtils::GetValueType(env, NapiUtils::GetNamedProperty(env, address, NET_PREFIXLENGTH)) != napi_number) {
+    napi_value prefixValue = NapiUtils::GetNamedProperty(env, address, NET_PREFIXLENGTH);
+    double requestedPrefix = 0;
+    if (NapiUtils::GetValueType(env, prefixValue) != napi_number) {
         NETMGR_EXT_LOG_E("param [%{public}s] type is mismatch", NET_PREFIXLENGTH);
         return false;
     }
-    iNetAddr.prefixlen_ = static_cast<uint8_t>(NapiUtils::GetUint32Property(env, address, NET_PREFIXLENGTH));
-    if (isIpv6 && iNetAddr.prefixlen_ == 0) {
-        iNetAddr.prefixlen_ = CommonUtils::Ipv6PrefixLen(iNetAddr.address_);
+    if (napi_get_value_double(env, prefixValue, &requestedPrefix) != napi_ok ||
+        !std::isfinite(requestedPrefix) || std::trunc(requestedPrefix) != requestedPrefix ||
+        requestedPrefix <= 0 || requestedPrefix > (isIpv6 ? IPV6_NET_PREFIX_MAX_LENGTH : NET_MASK_MAX_LENGTH)) {
+        NETMGR_EXT_LOG_E("invalid address prefixLength");
+        return false;
     }
+    // A prefix describes the requested network, not the bits of its host.
+    iNetAddr.prefixlen_ = static_cast<uint8_t>(requestedPrefix);
 
     NETMGR_EXT_LOG_I("isIpv6:%{public}d, %{public}s: %{public}d", isIpv6, NET_PREFIXLENGTH, iNetAddr.prefixlen_);
 
@@ -271,8 +283,21 @@ static bool ParseDestination(napi_env env, napi_value jsRoute, struct INetAddr &
     if (!ParseAddressFamily(env, netAddress, iNetAddr.family_)) {
         return false;
     }
-    GetUint8FromJsOptionItem(env, netAddress, NET_PORT, iNetAddr.port_);
-    GetUint8FromJsOptionItem(env, destination, NET_PREFIXLENGTH, iNetAddr.prefixlen_);
+    if (!NapiUtils::GetOptionalUint16Property(env, netAddress, NET_PORT, iNetAddr.port_)) {
+        return false;
+    }
+    napi_value prefixValue = NapiUtils::GetNamedProperty(env, destination, NET_PREFIXLENGTH);
+    double requestedPrefix = 0;
+    const int32_t maxPrefix = CommonUtils::IsValidIPV6(iNetAddr.address_)
+        ? IPV6_NET_PREFIX_MAX_LENGTH : NET_MASK_MAX_LENGTH;
+    if (NapiUtils::GetValueType(env, prefixValue) != napi_number ||
+        napi_get_value_double(env, prefixValue, &requestedPrefix) != napi_ok ||
+        !std::isfinite(requestedPrefix) || std::trunc(requestedPrefix) != requestedPrefix ||
+        requestedPrefix < 0 || requestedPrefix > maxPrefix) {
+        NETMGR_EXT_LOG_E("invalid route prefixLength");
+        return false;
+    }
+    iNetAddr.prefixlen_ = static_cast<uint8_t>(requestedPrefix);
     return true;
 }
 
@@ -289,7 +314,9 @@ static bool ParseGateway(napi_env env, napi_value jsRoute, struct INetAddr &iNet
     if (!ParseAddressFamily(env, gateway, iNetAddr.family_)) {
         return false;
     }
-    GetUint8FromJsOptionItem(env, gateway, NET_PORT, iNetAddr.port_);
+    if (!NapiUtils::GetOptionalUint16Property(env, gateway, NET_PORT, iNetAddr.port_)) {
+        return false;
+    }
     return true;
 }
 

@@ -49,7 +49,7 @@ public:
     MOCK_METHOD(int32_t, GetConnectedVpnAppInfo, (std::vector<std::string> &bundleNameList), (override));
     MOCK_METHOD(int32_t, GetSysVpnConfigList, (std::vector<sptr<SysVpnConfig>> &vpnList), (override));
     MOCK_METHOD(int32_t, GetSysVpnConfig, (sptr<SysVpnConfig> &config, const std::string &vpnId), (override));
-    MOCK_METHOD(int32_t, GetConnectedSysVpnConfig, (sptr<SysVpnConfig> &config), (override));
+    MOCK_METHOD(int32_t, GetConnectedSysVpnConfig, (std::vector<sptr<SysVpnConfig>> &configs), (override));
     MOCK_METHOD(int32_t, NotifyConnectStage, (const std::string &stage, const int32_t resultIpc), (override));
     MOCK_METHOD(int32_t, GetSysVpnCertUri, (const int32_t certType, std::string &certUri), (override));
     MOCK_METHOD(int32_t, DestroyVpn, (const std::string &vpnId), (override));

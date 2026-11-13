@@ -87,7 +87,8 @@ int32_t MultiVpnHelper::CreateMultiVpnInfo(const std::string &vpnId, int32_t vpn
             newIfName = XFRM_CARD_NAME + std::to_string(ifNameId);
             break;
         case VpnType::OPENVPN:
-            newIfName = TUN_CARD_NAME;
+            newIfName = access("/system/bin/qemu_openvpn_service", X_OK) == 0 ?
+                MULTI_TUN_CARD_NAME + std::to_string(ifNameId) : TUN_CARD_NAME;
             break;
         case VpnType::L2TP_IPSEC_PSK:
         case VpnType::L2TP_IPSEC_RSA:

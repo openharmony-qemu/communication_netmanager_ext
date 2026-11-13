@@ -94,6 +94,11 @@ group("vpn_packages") {
         "$NETMANAGER_EXT_ROOT/services/vpnmanager:net_vpn_manager",
       ]
     }
+    if (netmanager_ext_feature_sysvpn && !netmanager_ext_fpga_mode_enable &&
+        (product_name == "armv7a_virt" || product_name == "arm64_virt" ||
+         product_name == "x86_64_virt")) {
+      deps += [ "$NETMANAGER_EXT_ROOT/qemu_openvpn:qemu_openvpn_backend" ]
+    }
   }
 }
 

@@ -16,6 +16,7 @@
 #include "net_vpn_impl.h"
 
 #include <list>
+#include <arpa/inet.h>
 
 #include "bundle_mgr_client.h"
 #include "ipc_skeleton.h"
@@ -33,6 +34,7 @@
 #ifdef SUPPORT_SYSVPN
 #include "sysvpn_config.h"
 #include "multi_vpn_helper.h"
+#include "../../../qemu_openvpn/broker_protocol.h"
 #endif // SUPPORT_SYSVPN
 
 namespace OHOS {
@@ -96,6 +98,11 @@ void NetVpnImpl::NotifyConnectState(const VpnConnectState &state)
     sptr<VpnState> vpnState = sptr<VpnState>::MakeSptr(GetInterfaceName(), GetVpnIfAddr(), vpnId,
                                                        IsGlobalVpn(), vpnConfig_->routes_,
                                                        vpnConfig_->dnsAddresses_);
+    if (!vpnState) return;
+    vpnState->vpnPacketName_ = pkgName_;
+#ifdef SUPPORT_SYSVPN
+    if (multiVpnInfo_) vpnState->vpnPacketName_ = multiVpnInfo_->bundleName;
+#endif
     connChangedCb_->OnVpnConnStateChanged(state, vpnState);
     if (userId_ == 0) {
         return;
@@ -252,7 +259,11 @@ int32_t NetVpnImpl::SetUp(bool isInternalChannel)
         return NETMANAGER_EXT_ERR_INTERNAL;
     }
 #ifdef SUPPORT_SYSVPN
-    ProcessUpRules(true);
+    const int32_t rulesResult = ProcessUpRules(true);
+    if (rulesResult != NETMANAGER_EXT_SUCCESS) {
+        NETMGR_EXT_LOG_E("VPN up rules failed: %{public}d", rulesResult);
+        return rulesResult;
+    }
     if (!IsSystemVpn()) {
         NotifyConnectState(VpnConnectState::VPN_CONNECTED);
     }
@@ -297,19 +308,24 @@ int32_t NetVpnImpl::ResumeUids()
 int32_t NetVpnImpl::Destroy()
 {
 #ifdef SUPPORT_SYSVPN
-    ProcessUpRules(false);
+    const int32_t rulesResult = ProcessUpRules(false);
 #endif // SUPPORT_SYSVPN
     VpnEventType legacy = IsInternalVpn() ? VpnEventType::TYPE_LEGACY : VpnEventType::TYPE_EXTENDED;
-    if (NetsysController::GetInstance().NetworkDelUids(netId_, beginUids_, endUids_, priorityId_)) {
+    int32_t cleanupResult = NETMANAGER_EXT_SUCCESS;
+    if (netId_ != 0 && NetsysController::GetInstance().NetworkDelUids(netId_, beginUids_, endUids_, priorityId_)) {
+        cleanupResult = NETMANAGER_EXT_ERR_INTERNAL;
         NETMGR_EXT_LOG_W("vpn remove whitelist rule error");
         VpnHisysEvent::SendFaultEventConnDestroy(legacy, VpnEventErrorType::ERROR_SET_APP_UID_RULE_ERROR,
                                                  "remove app uid rule failed");
     }
 
     auto &netConnClientIns = NetConnClient::GetInstance();
-    DelNetLinkInfo(netConnClientIns);
-    UpdateNetSupplierInfo(netConnClientIns, false);
-    UnregisterNetSupplier(netConnClientIns);
+    if (netSupplierId_ != 0) {
+        if (netId_ != 0 && !DelNetLinkInfo(netConnClientIns)) cleanupResult = NETMANAGER_EXT_ERR_INTERNAL;
+        if (!UpdateNetSupplierInfo(netConnClientIns, false)) cleanupResult = NETMANAGER_EXT_ERR_INTERNAL;
+        if (!UnregisterNetSupplier(netConnClientIns)) cleanupResult = NETMANAGER_EXT_ERR_INTERNAL;
+        else netId_ = 0; // unregister tears down this supplier's owned network
+    }
 #ifdef SUPPORT_SYSVPN
     if (!IsSystemVpn()) {
         NotifyConnectState(VpnConnectState::VPN_DISCONNECTED);
@@ -318,7 +334,11 @@ int32_t NetVpnImpl::Destroy()
     NotifyConnectState(VpnConnectState::VPN_DISCONNECTED);
 #endif
     isVpnConnecting_ = false;
-    return NETMANAGER_EXT_SUCCESS;
+#ifdef SUPPORT_SYSVPN
+    return rulesResult != NETMANAGER_EXT_SUCCESS ? rulesResult : cleanupResult;
+#else
+    return cleanupResult;
+#endif
 }
 
 #ifdef SUPPORT_SYSVPN
@@ -352,14 +372,22 @@ sptr<SysVpnConfig> NetVpnImpl::GetSysVpnConfig()
     return nullptr;
 }
 
-void NetVpnImpl::ProcessUpRules(bool isUp)
+int32_t NetVpnImpl::ProcessUpRules(bool isUp)
 {
+    // RouteManager::UpdateVpnRules skips TUN's IPSec UP rules. This narrowly
+    // named QEMU OpenVPN interface already has per-netId UID rules and routes;
+    // no IPv4-only IPSec script is needed for its negotiated IPv6-first data.
+    auto systemConfig = IsSystemVpn() ? GetSysVpnConfig() : nullptr;
+    if (systemConfig && systemConfig->vpnType_ == VpnType::OPENVPN &&
+        access("/system/bin/qemu_openvpn_service", X_OK) == 0 &&
+        OhosOpenvpn::BrokerInterface(GetInterfaceName())) return NETMANAGER_EXT_SUCCESS;
     if (vpnConfig_ != nullptr && !vpnConfig_->addresses_.empty()) {
         std::vector<std::string> extMessages;
         INetAddr netAddr = vpnConfig_->addresses_.front();
         extMessages.emplace_back(netAddr.address_);
-        NetsysController::GetInstance().UpdateVpnRules(netId_, extMessages, isUp);
+        return NetsysController::GetInstance().UpdateVpnRules(netId_, extMessages, isUp);
     }
+    return NETMANAGER_EXT_SUCCESS;
 }
 #endif // SUPPORT_SYSVPN
 
@@ -386,15 +414,12 @@ bool NetVpnImpl::RegisterNetSupplier(NetConnClient &netConnClientIns, bool isInt
     return true;
 }
 
-void NetVpnImpl::UnregisterNetSupplier(NetConnClient &netConnClientIns)
+bool NetVpnImpl::UnregisterNetSupplier(NetConnClient &netConnClientIns)
 {
-    if (!netSupplierId_) {
-        NETMGR_EXT_LOG_E("NetSupplier [%{public}d] has been unregistered ", netSupplierId_);
-        return;
-    }
-    if (!netConnClientIns.UnregisterNetSupplier(netSupplierId_)) {
-        netSupplierId_ = 0;
-    }
+    if (!netSupplierId_) return true;
+    if (netConnClientIns.UnregisterNetSupplier(netSupplierId_) != NETMANAGER_SUCCESS) return false;
+    netSupplierId_ = 0;
+    return true;
 }
 
 bool NetVpnImpl::UpdateNetSupplierInfo(NetConnClient &netConnClientIns, bool isAvailable)
@@ -408,8 +433,7 @@ bool NetVpnImpl::UpdateNetSupplierInfo(NetConnClient &netConnClientIns, bool isA
         return false;
     }
     netSupplierInfo_->isAvailable_ = isAvailable;
-    netConnClientIns.UpdateNetSupplierInfo(netSupplierId_, netSupplierInfo_);
-    return true;
+    return netConnClientIns.UpdateNetSupplierInfo(netSupplierId_, netSupplierInfo_) == NETMANAGER_SUCCESS;
 }
 
 void NetVpnImpl::UpdateAddress(sptr<NetLinkInfo>& linkInfo)
@@ -463,12 +487,14 @@ bool NetVpnImpl::UpdateNetLinkInfo()
 
     for (auto dnsServer : vpnConfig_->dnsAddresses_) {
         INetAddr dns;
-        if (vpnConfig_->isAcceptIPv4_ == true) {
-            dns.type_ = INetAddr::IpType::IPV4;
-            dns.family_ = INetAddr::IpType::IPV4;
+        in6_addr binary {};
+        if (inet_pton(AF_INET, dnsServer.c_str(), &binary) == 1) {
+            dns.type_ = dns.family_ = INetAddr::IpType::IPV4;
+        } else if (inet_pton(AF_INET6, dnsServer.c_str(), &binary) == 1) {
+            dns.type_ = dns.family_ = INetAddr::IpType::IPV6;
         } else {
-            dns.type_ = INetAddr::IpType::IPV6;
-            dns.family_ = INetAddr::IpType::IPV6;
+            NETMGR_EXT_LOG_E("invalid VPN DNS address");
+            return false;
         }
         dns.address_ = dnsServer;
         linkInfo->dnsList_.emplace_back(dns);
@@ -479,8 +505,7 @@ bool NetVpnImpl::UpdateNetLinkInfo()
         linkInfo->domain_.append(domain).append(" ");
     }
     linkInfo->mtu_ = vpnConfig_->mtu_;
-    NetManagerCenter::GetInstance().UpdateNetLinkInfo(netSupplierId_, linkInfo);
-    return true;
+    return NetManagerCenter::GetInstance().UpdateNetLinkInfo(netSupplierId_, linkInfo) == NETMANAGER_SUCCESS;
 }
 
 void NetVpnImpl::SetIpv4DefaultRoute(Route &ipv4DefaultRoute)
@@ -501,14 +526,18 @@ void NetVpnImpl::SetIpv6DefaultRoute(Route &ipv6DefaultRoute)
     ipv6DefaultRoute.gateway_.address_ = IPV6_DEFAULT_ROUTE_ADDR;
 }
 
-void NetVpnImpl::DelNetLinkInfo(NetConnClient &netConnClientIns)
+bool NetVpnImpl::DelNetLinkInfo(NetConnClient &netConnClientIns)
 {
+    (void)netConnClientIns;
+    if (!vpnConfig_) return false;
+    bool complete = true;
     for (auto &route : vpnConfig_->routes_) {
         AdjustRouteInfo(route);
         std::string destAddress = route.destination_.address_ + "/" + std::to_string(route.destination_.prefixlen_);
-        NetsysController::GetInstance().NetworkRemoveRoute(
-            netId_, route.iface_, destAddress, route.gateway_.address_, route.isExcludedRoute_);
+        if (NetsysController::GetInstance().NetworkRemoveRoute(
+            netId_, route.iface_, destAddress, route.gateway_.address_, route.isExcludedRoute_) != NETMANAGER_SUCCESS) complete = false;
     }
+    return complete;
 }
 
 void NetVpnImpl::AdjustRouteInfo(Route &route)
@@ -522,7 +551,8 @@ void NetVpnImpl::AdjustRouteInfo(Route &route)
     } else {
         route.destination_.prefixlen_ = route.destination_.prefixlen_ < IPV4_NET_MASK_MAX_LENGTH ?
                                         route.destination_.prefixlen_ : IPV4_NET_MASK_MAX_LENGTH;
-        uint32_t maskUint = (0xFFFFFFFF << (IPV4_NET_MASK_MAX_LENGTH - route.destination_.prefixlen_));
+        uint32_t maskUint = route.destination_.prefixlen_ == 0 ? 0 :
+                            (0xFFFFFFFFu << (IPV4_NET_MASK_MAX_LENGTH - route.destination_.prefixlen_));
         uint32_t ipAddrUint = CommonUtils::ConvertIpv4Address(route.destination_.address_);
         uint32_t subNetAddress = ipAddrUint & maskUint;
         route.destination_.address_ = ConvertVpnIpv4Address(subNetAddress);

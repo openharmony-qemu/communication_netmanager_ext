@@ -22,6 +22,7 @@
 namespace OHOS {
 namespace NetManagerStandard {
 static constexpr const uint8_t MAX_REMOTE_ADDR_SIZE = 2;
+static constexpr const uint32_t MAX_LOCAL_ADDR_SIZE = 2000; // Match VpnConfig's address limit.
 
 bool SysVpnConfig::Marshalling(Parcel &parcel) const
 {
@@ -44,6 +45,9 @@ bool SysVpnConfig::Marshalling(Parcel &parcel) const
         allOK = allOK && parcel.WriteUint8(byte);
     }
 
+    if (localAddresses_.size() > MAX_LOCAL_ADDR_SIZE) {
+        return false;
+    }
     allOK = allOK && parcel.WriteInt32(static_cast<int32_t>(localAddresses_.size()));
     for (auto addr : localAddresses_) {
         // LCOV_EXCL_START
@@ -101,7 +105,7 @@ bool SysVpnConfig::Unmarshalling(Parcel &parcel, SysVpnConfig* ptr)
     int32_t pkcs12FileDataSize = 0;
     uint8_t data = 0;
     allOK = allOK && parcel.ReadInt32(pkcs12FileDataSize);
-    if (pkcs12FileDataSize > MAX_LEN_CERTIFICATE_CHAIN) {
+    if (!allOK || pkcs12FileDataSize < 0 || pkcs12FileDataSize > MAX_LEN_CERTIFICATE_CHAIN) {
         NETMGR_EXT_LOG_E("pkcs12FileDataSize is too large");
         return false;
     }
@@ -113,7 +117,7 @@ bool SysVpnConfig::Unmarshalling(Parcel &parcel, SysVpnConfig* ptr)
     int32_t localAddrSize = 0;
     allOK = allOK && parcel.ReadInt32(localAddrSize);
     // LCOV_EXCL_START
-    if (localAddrSize > MAX_LOCAL_ADDR_SIZE) {
+    if (!allOK || localAddrSize < 0 || localAddrSize > static_cast<int32_t>(MAX_LOCAL_ADDR_SIZE)) {
         NETMGR_EXT_LOG_E("localAddrSize is too large");
         return false;
     }

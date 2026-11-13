@@ -75,7 +75,7 @@ public:
         return 0;
     }
 
-    int32_t GetConnectedSysVpnConfig(sptr<SysVpnConfig> &config) override
+    int32_t GetConnectedSysVpnConfig(std::vector<sptr<SysVpnConfig>> &configs) override
     {
         return 0;
     }

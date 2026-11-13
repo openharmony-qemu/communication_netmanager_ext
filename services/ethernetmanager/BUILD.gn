@@ -107,7 +107,7 @@ ohos_shared_library("ethernet_manager") {
   }
 
   # Enable ethernet enable/disable feature conditionally
-  if (netmanager_ext_feature_net_firewall) {
+  if (netmanager_ext_feature_ethernet) {
     defines += [ "NETMANAGER_EXT_ETHERNET_ENABLE_DISABLE" ]
     external_deps += [
       "ability_base:want",
@@ -212,7 +212,7 @@ ohos_static_library("ethernet_manager_static") {
   }
 
   # Enable ethernet enable/disable feature conditionally
-  if (netmanager_ext_feature_net_firewall) {
+  if (netmanager_ext_feature_ethernet) {
     defines += [ "NETMANAGER_EXT_ETHERNET_ENABLE_DISABLE" ]
     external_deps += [
       "ability_base:want",

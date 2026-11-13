@@ -15,6 +15,8 @@
 
 #include "vpn_config_utils.h"
 
+#include <cmath>
+
 #include "napi_utils.h"
 #include "inet_addr.h"
 #include "net_manager_constants.h"
@@ -283,6 +285,37 @@ sptr<OpenvpnConfig> CreateAndParseOpenvpnConf(napi_env env, napi_value config)
     return openvpnConfig;
 }
 
+static bool ParseAddressFamily(napi_env env, napi_value netAddress, uint8_t &family)
+{
+    // Validate the SDK number before narrowing; 257/258 are not IPv4/IPv6.
+    bool present = false;
+    if (napi_has_named_property(env, netAddress, NET_FAMILY, &present) != napi_ok) {
+        return false;
+    }
+    if (!present) {
+        family = 1;
+        return true;
+    }
+    napi_value value = nullptr;
+    napi_valuetype type = napi_undefined;
+    if (napi_get_named_property(env, netAddress, NET_FAMILY, &value) != napi_ok ||
+        napi_typeof(env, value, &type) != napi_ok) {
+        return false;
+    }
+    if (type == napi_undefined) {
+        family = 1;
+        return true;
+    }
+    double requested = 0;
+    if (type != napi_number || napi_get_value_double(env, value, &requested) != napi_ok ||
+        !std::isfinite(requested) || std::trunc(requested) != requested ||
+        (requested != 1 && requested != 2)) {
+        return false;
+    }
+    family = static_cast<uint8_t>(requested);
+    return true;
+}
+
 bool ParseAddress(napi_env env, napi_value address, struct INetAddr &iNetAddr)
 {
     napi_value netAddress = NapiUtils::GetNamedProperty(env, address, NET_ADDRESS);
@@ -296,33 +329,37 @@ bool ParseAddress(napi_env env, napi_value address, struct INetAddr &iNetAddr)
         return false;
     }
 
+    if (!ParseAddressFamily(env, netAddress, iNetAddr.family_)) {
+        return false;
+    }
+
     bool isIpv6 = CommonUtils::IsValidIPV6(iNetAddr.address_);
     if (!isIpv6) {
         if (!CommonUtils::IsValidIPV4(iNetAddr.address_)) {
             NETMGR_EXT_LOG_W("invalid ip address, might be a domain");
-            GetUint8FromJsOptionItem(env, netAddress, NET_PORT, iNetAddr.port_);
-            return true;
+            return NapiUtils::GetOptionalUint16Property(env, netAddress, NET_PORT, iNetAddr.port_);
         }
     }
 
-    GetUint8FromJsOptionItem(env, netAddress, NET_FAMILY, iNetAddr.family_);
-    GetUint8FromJsOptionItem(env, netAddress, NET_PORT, iNetAddr.port_);
+    if (!NapiUtils::GetOptionalUint16Property(env, netAddress, NET_PORT, iNetAddr.port_)) {
+        return false;
+    }
 
     if (NapiUtils::GetValueType(env, NapiUtils::GetNamedProperty(env, address, NET_PREFIXLENGTH)) != napi_number) {
         NETMGR_EXT_LOG_E("param NET_PREFIXLENGTH type is mismatch");
         return false;
     }
-    if (!isIpv6) {
-        iNetAddr.prefixlen_ = static_cast<uint8_t>(NapiUtils::GetUint32Property(env, address, NET_PREFIXLENGTH));
-    } else {
-        iNetAddr.prefixlen_ = CommonUtils::Ipv6PrefixLen(iNetAddr.address_);
-    }
-
-    uint32_t prefix = iNetAddr.prefixlen_;
-    if (prefix == 0 || prefix >= (isIpv6 ? IPV6_NET_PREFIX_MAX_LENGTH : NET_MASK_MAX_LENGTH)) {
+    double prefixValue = 0;
+    if (napi_get_value_double(env, NapiUtils::GetNamedProperty(env, address, NET_PREFIXLENGTH),
+        &prefixValue) != napi_ok || !std::isfinite(prefixValue) || std::trunc(prefixValue) != prefixValue ||
+        prefixValue <= 0 || prefixValue >= (isIpv6 ? IPV6_NET_PREFIX_MAX_LENGTH : NET_MASK_MAX_LENGTH)) {
         NETMGR_EXT_LOG_E("prefixlen_ error");
         return false;
     }
+    // The prefix describes the network, not the bits of the IPv6 host address.
+    // Validate the original number before narrowing it to the native field.
+    uint32_t prefix = static_cast<uint32_t>(prefixValue);
+    iNetAddr.prefixlen_ = static_cast<uint8_t>(prefix);
     if (!isIpv6) {
         uint32_t maskUint = (0xFFFFFFFF << (NET_MASK_MAX_LENGTH - prefix));
         uint32_t ipAddrUint = CommonUtils::ConvertIpv4Address(iNetAddr.address_);
@@ -360,9 +397,24 @@ bool ParseDestination(napi_env env, napi_value jsRoute, struct INetAddr &iNetAdd
         return false;
     }
 
-    GetUint8FromJsOptionItem(env, netAddress, NET_FAMILY, iNetAddr.family_);
-    GetUint8FromJsOptionItem(env, netAddress, NET_PORT, iNetAddr.port_);
-    GetUint8FromJsOptionItem(env, destination, NET_PREFIXLENGTH, iNetAddr.prefixlen_);
+    if (!ParseAddressFamily(env, netAddress, iNetAddr.family_)) {
+        return false;
+    }
+    if (!NapiUtils::GetOptionalUint16Property(env, netAddress, NET_PORT, iNetAddr.port_)) {
+        return false;
+    }
+    napi_value prefix = NapiUtils::GetNamedProperty(env, destination, NET_PREFIXLENGTH);
+    double requestedPrefix = 0;
+    const int32_t maxPrefix = CommonUtils::IsValidIPV6(iNetAddr.address_)
+        ? IPV6_NET_PREFIX_MAX_LENGTH : NET_MASK_MAX_LENGTH;
+    if (NapiUtils::GetValueType(env, prefix) != napi_number ||
+        napi_get_value_double(env, prefix, &requestedPrefix) != napi_ok ||
+        !std::isfinite(requestedPrefix) || std::trunc(requestedPrefix) != requestedPrefix ||
+        requestedPrefix < 0 || requestedPrefix > maxPrefix) {
+        NETMGR_EXT_LOG_E("invalid route prefixLength");
+        return false;
+    }
+    iNetAddr.prefixlen_ = static_cast<uint8_t>(requestedPrefix);
     return true;
 }
 
@@ -379,8 +431,12 @@ bool ParseGateway(napi_env env, napi_value jsRoute, struct INetAddr &iNetAddr)
         return false;
     }
 
-    GetUint8FromJsOptionItem(env, gateway, NET_FAMILY, iNetAddr.family_);
-    GetUint8FromJsOptionItem(env, gateway, NET_PORT, iNetAddr.port_);
+    if (!ParseAddressFamily(env, gateway, iNetAddr.family_)) {
+        return false;
+    }
+    if (!NapiUtils::GetOptionalUint16Property(env, gateway, NET_PORT, iNetAddr.port_)) {
+        return false;
+    }
     return true;
 }
 
@@ -399,6 +455,7 @@ bool ParseRoute(napi_env env, napi_value jsRoute, Route &route)
 
     GetBoolFromJsOptionItem(env, jsRoute, NET_HAS_GATEWAY, route.hasGateway_);
     GetBoolFromJsOptionItem(env, jsRoute, NET_ISDEFAULTROUTE, route.isDefaultRoute_);
+    GetBoolFromJsOptionItem(env, jsRoute, "isExcludedRoute", route.isExcludedRoute_);
     return true;
 }
 
@@ -500,6 +557,61 @@ napi_value CreateNapiVpnConfig(napi_env env, sptr<SysVpnConfig> &sysVpnConfig)
     }
 }
 
+namespace {
+napi_value CreateNetworkAddress(napi_env env, const INetAddr &address)
+{
+    napi_value value = NapiUtils::CreateObject(env);
+    NapiUtils::SetStringPropertyUtf8(env, value, NET_ADDRESS, address.address_);
+    NapiUtils::SetUint32Property(env, value, NET_FAMILY, address.family_);
+    NapiUtils::SetUint32Property(env, value, NET_PORT, address.port_);
+    return value;
+}
+
+void SetOptionalStrings(napi_env env, napi_value config, const char *name,
+    const std::vector<std::string> &strings)
+{
+    if (strings.empty()) {
+        return;
+    }
+    napi_value array = NapiUtils::CreateArray(env, strings.size());
+    for (size_t i = 0; i < strings.size(); ++i) {
+        NapiUtils::SetArrayElement(env, array, i, NapiUtils::CreateStringUtf8(env, strings[i]));
+    }
+    NapiUtils::SetNamedProperty(env, config, name, array);
+}
+
+void SetNetworkConfigFields(napi_env env, napi_value config, const SysVpnConfig &native)
+{
+    NapiUtils::SetInt32Property(env, config, CONFIG_MTU, native.mtu_);
+    NapiUtils::SetBooleanProperty(env, config, CONFIG_ISIPV4ACCEPTED, native.isAcceptIPv4_);
+    NapiUtils::SetBooleanProperty(env, config, CONFIG_ISIPV6ACCEPTED, native.isAcceptIPv6_);
+    NapiUtils::SetBooleanProperty(env, config, CONFIG_ISLEGACY, native.isLegacy_);
+    NapiUtils::SetBooleanProperty(env, config, CONFIG_ISBLOCKING, native.isBlocking_);
+    NapiUtils::SetInt32Property(env, config, "userId", native.userId_);
+    SetOptionalStrings(env, config, CONFIG_TRUSTEDAPPLICATIONS, native.acceptedApplications_);
+    SetOptionalStrings(env, config, CONFIG_BLOCKEDAPPLICATIONS, native.refusedApplications_);
+    if (native.routes_.empty()) {
+        return;
+    }
+    napi_value routes = NapiUtils::CreateArray(env, native.routes_.size());
+    for (size_t i = 0; i < native.routes_.size(); ++i) {
+        const auto &route = native.routes_[i];
+        napi_value destination = NapiUtils::CreateObject(env);
+        NapiUtils::SetNamedProperty(env, destination, NET_ADDRESS, CreateNetworkAddress(env, route.destination_));
+        NapiUtils::SetUint32Property(env, destination, NET_PREFIXLENGTH, route.destination_.prefixlen_);
+        napi_value value = NapiUtils::CreateObject(env);
+        NapiUtils::SetStringPropertyUtf8(env, value, NET_INTERFACE, route.iface_);
+        NapiUtils::SetNamedProperty(env, value, NET_DESTINATION, destination);
+        NapiUtils::SetNamedProperty(env, value, NET_GATEWAY, CreateNetworkAddress(env, route.gateway_));
+        NapiUtils::SetBooleanProperty(env, value, NET_HAS_GATEWAY, route.hasGateway_);
+        NapiUtils::SetBooleanProperty(env, value, NET_ISDEFAULTROUTE, route.isDefaultRoute_);
+        NapiUtils::SetBooleanProperty(env, value, "isExcludedRoute", route.isExcludedRoute_);
+        NapiUtils::SetArrayElement(env, routes, i, value);
+    }
+    NapiUtils::SetNamedProperty(env, config, CONFIG_ROUTES, routes);
+}
+} // namespace
+
 napi_value CreateNapiSysVpnConfig(napi_env env, sptr<SysVpnConfig> &sysVpnConfig)
 {
     if (sysVpnConfig == nullptr) {
@@ -507,33 +619,41 @@ napi_value CreateNapiSysVpnConfig(napi_env env, sptr<SysVpnConfig> &sysVpnConfig
         return NapiUtils::GetUndefined(env);
     }
     napi_value config = NapiUtils::CreateObject(env);
-    std::vector<INetAddr> addresses = sysVpnConfig->addresses_;
-    if (!addresses.empty()) {
-        napi_value linkAddresses = NapiUtils::CreateArray(env, 1);
+    const auto &addresses = sysVpnConfig->addresses_;
+    napi_value linkAddresses = NapiUtils::CreateArray(env, addresses.size());
+    for (size_t i = 0; i < addresses.size(); ++i) {
         napi_value netAddr = NapiUtils::CreateObject(env);
-        NapiUtils::SetStringPropertyUtf8(env, netAddr, NET_ADDRESS, addresses[0].address_);
+        NapiUtils::SetStringPropertyUtf8(env, netAddr, NET_ADDRESS, addresses[i].address_);
+        NapiUtils::SetUint32Property(env, netAddr, NET_FAMILY, addresses[i].family_);
+        NapiUtils::SetUint32Property(env, netAddr, NET_PORT, addresses[i].port_);
         napi_value linkAddr = NapiUtils::CreateObject(env);
         NapiUtils::SetNamedProperty(env, linkAddr, NET_ADDRESS, netAddr);
-        NapiUtils::SetUint32Property(env, linkAddr, NET_PREFIXLENGTH, 1);
-        NapiUtils::SetArrayElement(env, linkAddresses, 0, linkAddr);
-        NapiUtils::SetNamedProperty(env, config, CONFIG_ADDRESSES, linkAddresses);
+        NapiUtils::SetUint32Property(env, linkAddr, NET_PREFIXLENGTH, addresses[i].prefixlen_);
+        NapiUtils::SetArrayElement(env, linkAddresses, i, linkAddr);
     }
-    std::vector<std::string> remoteAddrs = sysVpnConfig->remoteAddresses_;
+    NapiUtils::SetNamedProperty(env, config, CONFIG_ADDRESSES, linkAddresses);
+    const auto &remoteAddrs = sysVpnConfig->remoteAddresses_;
     if (!remoteAddrs.empty()) {
-        napi_value remoteArray = NapiUtils::CreateArray(env, 1);
-        NapiUtils::SetArrayElement(env, remoteArray, 0, NapiUtils::CreateStringUtf8(env, remoteAddrs[0]));
+        napi_value remoteArray = NapiUtils::CreateArray(env, remoteAddrs.size());
+        for (size_t i = 0; i < remoteAddrs.size(); ++i) {
+            NapiUtils::SetArrayElement(env, remoteArray, i, NapiUtils::CreateStringUtf8(env, remoteAddrs[i]));
+        }
         NapiUtils::SetNamedProperty(env, config, CONFIG_REMOTE_ADDRS, remoteArray);
     }
-    std::vector<std::string> dnsAddresses = sysVpnConfig->dnsAddresses_;
+    const auto &dnsAddresses = sysVpnConfig->dnsAddresses_;
     if (!dnsAddresses.empty()) {
-        napi_value dnsArray = NapiUtils::CreateArray(env, 1);
-        NapiUtils::SetArrayElement(env, dnsArray, 0, NapiUtils::CreateStringUtf8(env, dnsAddresses[0]));
+        napi_value dnsArray = NapiUtils::CreateArray(env, dnsAddresses.size());
+        for (size_t i = 0; i < dnsAddresses.size(); ++i) {
+            NapiUtils::SetArrayElement(env, dnsArray, i, NapiUtils::CreateStringUtf8(env, dnsAddresses[i]));
+        }
         NapiUtils::SetNamedProperty(env, config, CONFIG_DNSADDRESSES, dnsArray);
     }
-    std::vector<std::string> searchDomains = sysVpnConfig->searchDomains_;
+    const auto &searchDomains = sysVpnConfig->searchDomains_;
     if (!searchDomains.empty()) {
-        napi_value domainsArray = NapiUtils::CreateArray(env, 1);
-        NapiUtils::SetArrayElement(env, domainsArray, 0, NapiUtils::CreateStringUtf8(env, searchDomains[0]));
+        napi_value domainsArray = NapiUtils::CreateArray(env, searchDomains.size());
+        for (size_t i = 0; i < searchDomains.size(); ++i) {
+            NapiUtils::SetArrayElement(env, domainsArray, i, NapiUtils::CreateStringUtf8(env, searchDomains[i]));
+        }
         NapiUtils::SetNamedProperty(env, config, CONFIG_SEARCHDOMAINS, domainsArray);
     }
     NapiUtils::SetStringPropertyUtf8(env, config, CONFIG_VPN_ID, sysVpnConfig->vpnId_);
@@ -544,6 +664,7 @@ napi_value CreateNapiSysVpnConfig(napi_env env, sptr<SysVpnConfig> &sysVpnConfig
     NapiUtils::SetBooleanProperty(env, config, CONFIG_SAVE_LOGIN, sysVpnConfig->saveLogin_ == 0 ? false : true);
     NapiUtils::SetStringPropertyUtf8(env, config, CONFIG_FORWARDED_ROUTES, sysVpnConfig->forwardingRoutes_);
     SetLocalAddressesProperty(env, config, sysVpnConfig->localAddresses_);
+    SetNetworkConfigFields(env, config, *sysVpnConfig);
     return config;
 }
 
@@ -557,6 +678,8 @@ void SetLocalAddressesProperty(napi_env env, napi_value config, const std::vecto
     for (size_t i = 0; i < localAddresses.size(); i++) {
         napi_value netAddr = NapiUtils::CreateObject(env);
         NapiUtils::SetStringPropertyUtf8(env, netAddr, NET_ADDRESS, localAddresses[i].address_);
+        NapiUtils::SetUint32Property(env, netAddr, NET_FAMILY, localAddresses[i].family_);
+        NapiUtils::SetUint32Property(env, netAddr, NET_PORT, localAddresses[i].port_);
         napi_value linkAddr = NapiUtils::CreateObject(env);
         NapiUtils::SetNamedProperty(env, linkAddr, NET_ADDRESS, netAddr);
         NapiUtils::SetUint32Property(env, linkAddr, NET_PREFIXLENGTH, localAddresses[i].prefixlen_);
