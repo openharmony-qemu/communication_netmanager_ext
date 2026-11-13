@@ -1,0 +1,102 @@
+--- a/foundation/communication/netmanager_ext/services/vpnmanager/include/open_vpn_ctl.h
++++ b/foundation/communication/netmanager_ext/services/vpnmanager/include/open_vpn_ctl.h
+@@ -107,6 +107,7 @@
+     bool qemuNeedsCleanup_ = false;
+     bool qemuConfigured_ = false;
+     bool qemuTunReady_ = false;
++    std::string qemuLastConfig_;
+ };
+ } // namespace NetManagerStandard
+ } // namespace OHOS
+--- a/foundation/communication/netmanager_ext/services/vpnmanager/src/open_vpn_ctl.cpp
++++ b/foundation/communication/netmanager_ext/services/vpnmanager/src/open_vpn_ctl.cpp
+@@ -25,6 +25,7 @@
+ #include "../../../qemu_openvpn/broker_protocol.h"
+ #include "multi_vpn_helper.h"
+ #include "../../../qemu_openvpn/negotiated_config.h"
++#include "../../../qemu_openvpn/profile_policy.h"
+ 
+ #include "base64_utils.h"
+ #include "netmanager_base_common_utils.h"
+@@ -410,7 +411,7 @@
+     qemuWorkerStopped_ = qemuNeedsCleanup_ = qemuStoppingRequested_ = false;
+     qemuBroker_ = -1; qemuBrokerStart_.clear();
+     qemuClaimDeadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+-    qemuConfigured_ = qemuTunReady_ = false;
++    qemuConfigured_ = qemuTunReady_ = false; qemuLastConfig_.clear();
+     if (access("/system/bin/qemu_openvpn_service", X_OK) != 0) return true;
+     std::array<unsigned char, 16> random {};
+     size_t offset = 0;
+@@ -535,16 +536,63 @@
+         auto setup = cJSON_GetObjectItemCaseSensitive(message, "setupVpnTun");
+         auto state = cJSON_GetObjectItemCaseSensitive(message, "updateState");
+         auto reconnect = cJSON_GetObjectItemCaseSensitive(message, "reconnecting");
+-        if (role == OhosOpenvpn::SessionRole::Bridge && config && !qemuTunReady_) response = UpdateQemuConfig(config);
+-        else if (role == OhosOpenvpn::SessionRole::Bridge && cJSON_IsObject(setup) &&
+-            cJSON_GetArraySize(setup) == 0 && qemuConfigured_ && !qemuTunReady_) {
+-            qemuNeedsCleanup_ = true;
+-            response = SetUpVpnTun(); qemuTunReady_ = response == NETMANAGER_EXT_SUCCESS;
+-            if (response != NETMANAGER_EXT_SUCCESS) qemuNeedsCleanup_ = NetVpnImpl::Destroy() != NETMANAGER_EXT_SUCCESS;
++        const bool persistent = openvpnConfig_ && OhosOpenvpn::ProfileHasOption(
++            Base64::Decode(openvpnConfig_->ovpnConfig_), "persist-tun");
++        if (role == OhosOpenvpn::SessionRole::Bridge && config && (!qemuTunReady_ || persistent)) {
++            char *printed = cJSON_PrintUnformatted(config);
++            const std::string next = printed ? printed : ""; cJSON_free(printed);
++            if (!next.empty() && next == qemuLastConfig_ && qemuConfigured_) response = NETMANAGER_EXT_SUCCESS;
++            else if (!qemuTunReady_) {
++                response = UpdateQemuConfig(config);
++                if (response == NETMANAGER_EXT_SUCCESS) qemuLastConfig_ = next;
++            } else if (!next.empty()) {
++                // The enclosing service netVpnMutex_ serializes the whole
++                // replacement. Parse every new field before removing old
++                // routes/DNS; restore the old snapshot if any operation fails.
++                const auto saved = *vpnConfig_;
++                const auto savedLocal = openvpnConfig_->localAddresses_;
++                response = UpdateQemuConfig(config);
++                *vpnConfig_ = saved; openvpnConfig_->localAddresses_ = savedLocal;
++                if (response == NETMANAGER_EXT_SUCCESS) {
++                    response = NetVpnImpl::Destroy();
++                    if (response == NETMANAGER_EXT_SUCCESS) {
++                        qemuNeedsCleanup_ = false;
++                        response = UpdateQemuConfig(config);
++                        if (response == NETMANAGER_EXT_SUCCESS) {
++                            qemuNeedsCleanup_ = true; response = NetVpnImpl::SetUp();
++                        }
++                        if (response == NETMANAGER_EXT_SUCCESS) qemuLastConfig_ = next;
++                        else {
++                            const int original = response;
++                            const int clear = NetVpnImpl::Destroy();
++                            *vpnConfig_ = saved; openvpnConfig_->localAddresses_ = savedLocal;
++                            const int restored = clear == NETMANAGER_EXT_SUCCESS ? NetVpnImpl::SetUp() : clear;
++                            qemuTunReady_ = restored == NETMANAGER_EXT_SUCCESS;
++                            qemuNeedsCleanup_ = true;
++                            NETMGR_EXT_LOG_E("QemuReconfigure rollback generation=%{public}s result=%{public}d restore=%{public}d",
++                                qemuGeneration_.c_str(), original, restored);
++                            response = original;
++                        }
++                    }
++                }
++                NETMGR_EXT_LOG_I("QemuReconfigure generation=%{public}s interface=%{public}s result=%{public}d",
++                    qemuGeneration_.c_str(), GetInterfaceName().c_str(), response);
++            }
++        } else if (role == OhosOpenvpn::SessionRole::Bridge && cJSON_IsObject(setup) &&
++            cJSON_GetArraySize(setup) == 0 && qemuConfigured_) {
++            if (qemuTunReady_ && persistent) response = NETMANAGER_EXT_SUCCESS;
++            else if (!qemuTunReady_) {
++                qemuNeedsCleanup_ = true;
++                response = SetUpVpnTun(); qemuTunReady_ = response == NETMANAGER_EXT_SUCCESS;
++                if (response != NETMANAGER_EXT_SUCCESS) qemuNeedsCleanup_ = NetVpnImpl::Destroy() != NETMANAGER_EXT_SUCCESS;
++            }
+         } else if (role == OhosOpenvpn::SessionRole::Supervisor && cJSON_IsObject(reconnect) && cJSON_GetArraySize(reconnect) == 0) {
+-            response = qemuNeedsCleanup_ ? NetVpnImpl::Destroy() : NETMANAGER_EXT_SUCCESS;
+-            if (response == NETMANAGER_EXT_SUCCESS) qemuNeedsCleanup_ = false;
+-            qemuConfigured_ = qemuTunReady_ = false;
++            const bool preserve = persistent && qemuTunReady_ && qemuConfigured_;
++            response = !preserve && qemuNeedsCleanup_ ? NetVpnImpl::Destroy() : NETMANAGER_EXT_SUCCESS;
++            if (!preserve && response == NETMANAGER_EXT_SUCCESS) qemuNeedsCleanup_ = false;
++            qemuConfigured_ = qemuTunReady_ = preserve;
++            NETMGR_EXT_LOG_I("QemuReconnect generation=%{public}s interface=%{public}s preserve=%{public}d result=%{public}d",
++                qemuGeneration_.c_str(), GetInterfaceName().c_str(), preserve, response);
+             UpdateOpenvpnState(OPENVPN_STATE_DISCONNECTED);
+             if (response == NETMANAGER_EXT_SUCCESS) UpdateOpenvpnState(OPENVPN_STATE_STARTED);
+         } else if (role == OhosOpenvpn::SessionRole::Supervisor && cJSON_IsObject(state) && cJSON_GetArraySize(state) == 1) {
